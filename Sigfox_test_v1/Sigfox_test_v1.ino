@@ -1,5 +1,3 @@
-//#include "C:\Users\sebas\Documents\Dropbox\Skole\Telekommunikation On Arduino\Project_Code\Include\Isigfox\WISOL.h"
-//#include "C:\Users\sebas\Documents\Dropbox\Skole\Telekommunikation On Arduino\Project_Code\Include\Tsensors\Tsensors.h"
 
 /*
   DemoApp.ino - Demo application for Xkit with Arduino board
@@ -109,10 +107,10 @@ void loop() {
   wdt_reset();
   watchdogCounter = 0;
 
-  serialInput[0] = Serial.read();
-  Serial.print(serialInput);
+  //serialInput[0] = Serial.read();
+  //Serial.print(serialInput);
 
- Send_Sensors();
+  //Send_Sensors();
   
   //Serial.println("looping");
   delay(1000);
