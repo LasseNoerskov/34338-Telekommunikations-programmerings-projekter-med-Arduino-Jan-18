@@ -3,8 +3,8 @@
 #include <SoftwareSerial.h>
 #include <sigfox_Support.h>
 
-#define USE_SIGFOX 0          // 0 = disable all Sigfox code, 1 = enable Sigfox code
-#define TEST_SIGFOX 1          // 0 = normal operation. 1 = the program will pretend it is sending stuff.
+#define USE_SIGFOX 1          // 0 = disable all Sigfox code, 1 = enable Sigfox code
+#define TEST_SIGFOX 0          // 0 = normal operation. 1 = the program will pretend it is sending stuff.
 
 #define MOCK_LAT 557822
 #define MOCK_LONG 125168
@@ -100,6 +100,7 @@ void loop() { // run over and over
     
 
     format_payload(payloadData, MOCK_LAT, MOCK_LONG, MOCK_TIME);
+    //format_payload(payloadData, 0x001234, 0, 0);
     
     
     //********************//
@@ -115,9 +116,9 @@ void loop() { // run over and over
       }
       if(TEST_SIGFOX){
         gpsSerial.println("\nPAYLOAD: ");
-        gpsSerial.print("Data: ");
+        gpsSerial.print("Data [HEX]: ");
         for(int i=0; i<12;i++){
-          gpsSerial.print(payloadData[i]);
+          gpsSerial.print(payloadData[i],HEX);
           gpsSerial.print(' ');
         }
         gpsSerial.print("\n\r");
