@@ -12,7 +12,7 @@
 #define MOCK_TIME 1034
 
 #define SIGFOX_TRANSMISSION_INTERVAL 900000    // Time between Sigfox transmissions in ms (15m).
-#define GPS_FIX_STD_INTERVAL 10000             // Standard time between GPS rewuests in ms (5m = 300000ms).
+#define GPS_FIX_STD_INTERVAL 180000             // Standard time between GPS rewuests in ms (5m = 300000ms).
 
 #define EEPROM_ADDR_LAT 0          // Address of the Lattitude in the EEPROM.
 #define EEPROM_ADDR_LONG 4         // Address of the Lattitude in the EEPROM.
