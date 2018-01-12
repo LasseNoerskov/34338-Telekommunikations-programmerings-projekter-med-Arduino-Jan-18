@@ -2,21 +2,23 @@
 #include <SoftwareSerial.h>
 #include <sigfox_Support.h>
 #include <EEPROM.h>
+#include <avr/wdt.h>
 
-#define USE_SIGFOX 0          // 0 = disable all Sigfox code, 1 = enable Sigfox code
-#define TEST_SIGFOX 1          // 0 = normal operation. 1 = the program will pretend it is sending stuff.
+#define USE_SIGFOX 1          // 0 = disable all Sigfox code, 1 = enable Sigfox code
+#define TEST_SIGFOX 0          // 0 = normal operation. 1 = the program will pretend it is sending stuff.
 
 #define MOCK_LAT 557822
 #define MOCK_LONG 125168
 #define MOCK_TIME 1034
 
-#define SIGFOX_TRANSMISSION_INTERVAL  900000    // Time between Sigfox transmissions in ms (15m).
-#define GPS_FIX_STD_INTERVAL 30000             // Standard time between GPS rewuests in ms (5m = 300000ms).
+#define SIGFOX_TRANSMISSION_INTERVAL 900000    // Time between Sigfox transmissions in ms (15m).
+#define GPS_FIX_STD_INTERVAL 10000             // Standard time between GPS rewuests in ms (5m = 300000ms).
 
 #define EEPROM_ADDR_LAT 0          // Address of the Lattitude in the EEPROM.
 #define EEPROM_ADDR_LONG 4         // Address of the Lattitude in the EEPROM.
 #define EEPROM_ADDR_GPS_TIM 8      // Address of the last-GPS-fix-time  in the EEPROM.
 #define EEPROM_ADDR_SF_TIM 12      // Address of the last-Sigfox-Transission-time  in the EEPROM.
+#define EEPROM_ADDR_WDT_COUNT 16   // Address of the WDT reset count in the EEPROM.
 
 SoftwareSerial gpsSerial(A3, A2); // RX, TX
 
@@ -38,6 +40,47 @@ long gpsTime;                               // Last valid GPS time.
 
 unsigned long prevMillies = 0;       // last time millis() was called.
 unsigned long currentTime = 0;       // The current Time Of Day in milli seconds. Time is UTC.
+unsigned long WDT_resetCount = 0;
+
+
+// WDT Interrupt function.
+ISR(WDT_vect)
+{
+  eepromWrite(WDT_resetCount+1, EEPROM_ADDR_WDT_COUNT);
+}
+
+void initWDT(){
+  /*
+   * WatchDog control register:
+   * WDIF: Watchdog interrupt flag. Set high by the system.
+   * WDIE: Watchdog interrupt enable.
+   * WDP[3]: Watchdog Timer Prescaler3
+   * WDCE: Watchdog Change Enable.
+   * WDE: Watchdog System Reset Enable.
+   * WDP[2:0]: Watchdog Timer Prescaler.
+   * 
+   * WDIF:      '1'     
+   * WDIE:      '1'
+   * WDP[3]:    '1'
+   * WDCE:      '0'
+   * WDE:       '1'
+   * WDP[2:0]:  '001'   
+   * 
+   * Setting WDP[3:0] to '1001' result in 8000ms timeout.
+   * 
+   */
+
+   cli();   // Diabling interrupts.
+   wdt_reset();   // Reset Watchdog Timer.
+
+   // Entering EDT setup mode, by setting WDCE and WDE.
+   WDTCSR |= (1<<WDCE) | (1<<WDE);
+
+   // Setting the WDT control reg
+   WDTCSR = 0xE9;
+
+   sei();   // Enabling interrupts.
+}
 
 void setup() {
   //******************************//
@@ -73,18 +116,40 @@ void setup() {
   gpsSerial.println(F("$PUBX,40,GLL,0,0,0,0*5C")); //GLL OFF
   delay(1000);
 
-  Serial.println(eepromRead( EEPROM_ADDR_LAT));
-  Serial.println(eepromRead( EEPROM_ADDR_LONG));
-  Serial.println(eepromRead( EEPROM_ADDR_GPS_TIM));
-  Serial.println(eepromRead( EEPROM_ADDR_SF_TIM));
+
+  //******************************//
+  //           WDT                //
+  //******************************//
+  initWDT();
+  wdt_reset();   // Reset Watchdog Timer.
+
+  WDT_resetCount = eepromRead(EEPROM_ADDR_WDT_COUNT);
+
+  Serial.print("WDT_RC:  ");
+  Serial.println(WDT_resetCount);
+  gpsSerial.print("WDT_RC:  ");
+  gpsSerial.println(WDT_resetCount);
+  
+  //eepromWrite(0,EEPROM_ADDR_WDT_COUNT);
+
+  
+  //******************************//
+  // Get old data from EEPROM     //
+  //******************************//
+//  Serial.println(eepromRead( EEPROM_ADDR_LAT));
+//  Serial.println(eepromRead( EEPROM_ADDR_LONG));
+//  Serial.println(eepromRead( EEPROM_ADDR_GPS_TIM));
+//  Serial.println(eepromRead( EEPROM_ADDR_SF_TIM));
 
   // Reading old values from EEPROM.
   lastSfSendTime = eepromRead( EEPROM_ADDR_SF_TIM);                     // Last time (of day) the last Sigfox transmission was sent.
   lastGPSUpdateTime = eepromRead( EEPROM_ADDR_GPS_TIM);                 // Last time (of day) the GPS position was successfully updated.
   latitude = eepromRead( EEPROM_ADDR_LAT);                              // Last valid GPS lat.
   longtitude = eepromRead( EEPROM_ADDR_LONG);                           // Last valid GPS long.
-
+  
+  
   currentTime = lastGPSUpdateTime;              // Setting the starting time to the last GPS update, as it is closer than 0.
+
   
   gpsSerial.println("End of Setup");
   Serial.println("End of Setup");
@@ -95,7 +160,7 @@ void loop() { // run over and over
 //  byte payloadData[] = {'H','E','L','L','O','W','O','R','L','D',4,2};
   byte payloadData[] = {0,0,0,0,0,0,0,0,0,0,0,0};
   boolean transmitPayloadFlag = false;              // Flag set when transmitting data.
-  boolean sfUpdateAllowedTime = false;              // Flag for allowing new Sigfox transmission, based on time since last.
+  boolean sfTransmitAllowed_Time = false;              // Flag for allowing new Sigfox transmission, based on time since last.
   
   
   boolean updateGPS = false;
@@ -114,6 +179,7 @@ void loop() { // run over and over
   
 
   while(1){
+    wdt_reset();   // Reset Watchdog Timer.
     //******************************//
     //           Serial             //
     //******************************// 
@@ -122,10 +188,11 @@ void loop() { // run over and over
     //******************************//
     //           Time               //
     //******************************//
-    
+    wdt_reset();   // Reset Watchdog Timer.
     updatedTOD();
-    
-    if(currentTime > debugLong+1000){
+
+    // Prints time only when not using Sigfox
+    if(currentTime > debugLong+1000 && TEST_SIGFOX){
       debugLong = currentTime;
       Serial.print("TOD: ");
       Serial.print((currentTime));
@@ -135,16 +202,29 @@ void loop() { // run over and over
       Serial.print( floor( (currentTime/60/60/10)%100)/100*60 );
       Serial.print(" ");
       Serial.print(floor((currentTime/1000)%60));
-      Serial.print(" ");
-      Serial.println(" ");
+      Serial.print("   ");
+      Serial.println(millis());
     }
-    
+
+    // Check Wether enoough time has passed for a GPS update.
+    if(gpsUpdateAllowedTime ) {      // && gpsUpdateAllowedTime
+      gpsUpdateAllowedTime = false;
+      updateGPS = true;
+      //Serial.read();
+    }
+    // Check Wether enoough time has passed for a Sigfox transmission.
+    if(  (lastSfSendTime + SIGFOX_TRANSMISSION_INTERVAL) < currentTime){
+      sfTransmitAllowed_Time = true;
+
+      //Serial.read();
+    }
     
     //
 
     //******************************//
     //            GPS               //
     //******************************//
+    wdt_reset();   // Reset Watchdog Timer.
     // If GPS_FIX_STD_INTERVAL time has passed, allow an update of the GPS pos.
     if(((lastGPSUpdateTime + GPS_FIX_STD_INTERVAL) < currentTime) ){
       gpsUpdateAllowedTime = true;
@@ -155,16 +235,14 @@ void loop() { // run over and over
       lastGPSUpdateTime = 600000;           // Set 'lastGPSUpdateTime' to 00:10:00.
     }
    
-    if(Serial.available() || gpsUpdateAllowedTime ) {      // && gpsUpdateAllowedTime
-      gpsUpdateAllowedTime = false;
-      updateGPS = true;
-      Serial.read();
-    }
+    
     // Updates the GPS postion and time.
-    if(updateGPS){
-      Serial.println("Fecthing");
+    if(updateGPS || sfTransmitAllowed_Time){
+      //Serial.println("Fecthing");
+      wdt_reset();   // Reset Watchdog Timer.
       fetch();
-      Serial.println("Done Fecthing");
+      wdt_reset();   // Reset Watchdog Timer.
+      //Serial.println("Done Fecthing");
       
 
       // Converting GPS data to integers
@@ -193,6 +271,7 @@ void loop() { // run over and over
         eepromWrite(lastGPSUpdateTime, EEPROM_ADDR_GPS_TIM);
         
         // printing studd, used for debugging.
+        /*
         Serial.println("Valid GPS found");
         Serial.print("Latitude: ");
         Serial.print(la);
@@ -213,6 +292,7 @@ void loop() { // run over and over
         Serial.print("  ");
         Serial.print(lastGPSUpdateTime);
         Serial.println();
+        */
       }
       updateGPS = false;
     }
@@ -222,9 +302,8 @@ void loop() { // run over and over
     //******************************//
     //          SIGFOX              //
     //******************************//
-    if(0){
-      
-    }
+    wdt_reset();   // Reset Watchdog Timer.
+    
     //********************//
     //   Format payload.  //
     //********************//
@@ -236,22 +315,29 @@ void loop() { // run over and over
     //********************//
     // Transmitt payload  //
     //********************//
-    // Checks wether a 'SEND' command has been recieved. 
+    // Checks if all conditions are met in order to allow a transmission.
+    if(sfTransmitAllowed_Time){
+      sfTransmitAllowed_Time = false;
+      transmitPayloadFlag = true;
+    }
     
     // Sends the payload
     if((USE_SIGFOX || TEST_SIGFOX) && transmitPayloadFlag ){
+      transmitPayloadFlag = false;
       gpsSerial.write("TRANSMITTING DATA!\r\n");
       
-
+      
       if(USE_SIGFOX){
-        Send_Pload(payloadData,12);
-        updatedTOD();
-        lastSfSendTime = currentTime;
+        wdt_reset();   // Reset Watchdog Timer.
+        Send_Pload(payloadData,12);       // Send payload.
       }
-      eepromWrite(lastSfSendTime, EEPROM_ADDR_SF_TIM);
+      wdt_reset();   // Reset Watchdog Timer.
+      updatedTOD();                     // Update time.
+      lastSfSendTime = currentTime;     // Save time.
+      eepromWrite(lastSfSendTime, EEPROM_ADDR_SF_TIM);  // save time to EEPROM.
       
       if(TEST_SIGFOX){
-        gpsSerial.println("\nPAYLOAD: ");
+        gpsSerial.println("PAYLOAD: ");
         gpsSerial.print("Data [HEX]: ");
         for(int i=0; i<12;i++){
           gpsSerial.print(payloadData[i],HEX);
@@ -268,7 +354,7 @@ void loop() { // run over and over
         debugLong = (((long)payloadData[6])<<8) + payloadData[7];
         gpsSerial.print(debugLong); gpsSerial.print("  ");
 
-        gpsSerial.print("\n\r");
+        gpsSerial.println("\n\r");
       }
     }
     
@@ -290,10 +376,13 @@ void updatedTOD(){
 void fetch() {
   //Serial.println("fetching");
   bool newdat=false;
+  long oldSendMill = 0;
+  
   while(!newdat){
   //If message is not started, send a request for the gps module.
-  if (!message_started) {
+  if (!message_started && ( (oldSendMill+10) < millis() ) ) {
       gpsSerial.println("$PUBX,00*33");
+      oldSendMill = millis();
       }
   
   while (gpsSerial.available()) {
